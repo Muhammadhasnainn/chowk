@@ -17,8 +17,63 @@ const GREETING: Message = {
     "I know the menu, the hours, and how things are cooked here. Ask me anything and I will keep it short.",
 };
 
-function newSession() {
-  return `chowk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const SYSTEM_PROMPT = `
+You are the kitchen assistant for Chowk, a restaurant in Karachi.
+Answer only using the info below. Keep answers short (1-3 sentences).
+If you don't know something, say so and suggest calling +92 3445059989.
+
+LOCATION:
+Plot 42-C, Khayaban-e-Bukhari, Phase VI, DHA, Karachi 75500
+
+HOURS:
+Tuesday to Sunday, from 6pm. Closed Mondays. No reservations before seven.
+
+CONTACT:
+Phone: +92 3445059989
+Email: table@chowk.pk
+
+ABOUT:
+Chowk opened in a converted bungalow garage in 2019 with six tables and one cook.
+Now has more tables and four cooks, same original tandoor, lit at 4pm daily.
+Meat sourced from the same two suppliers since opening. Masala ground fresh every morning.
+
+MENU:
+- Sikandari Raan — Rs 4,800 — A whole leg of lamb, steamed overnight, finished on the coals.
+- Kata Kat — Rs 1,400 — Mutton offal on the tawa, chopped fast.
+- White Karahi — Rs 1,900 — Mutton in yoghurt and black pepper. No tomato, no colour, all weight.
+- Roghni Naan — Rs 180 — Milk dough, sesame, brushed with ghee straight from the tandoor.
+- Gajar ka Halwa — Rs 480 — Winter carrots, whole milk, four hours of stirring. Seasonal: December to February only.
+- Doodh Patti — Rs 220 — Milk, tea, sugar. Boiled hard, poured high, no water at any stage.
+
+Note: the full menu has twelve dishes; only six are listed above. If asked about a dish not listed here, say you're not sure and suggest checking the menu page or calling.
+`;
+
+const API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY;
+const MODEL = process.env.NEXT_PUBLIC_GROQ_MODEL || "llama-3.1-8b-instant";
+
+async function askKitchen(query: string, history: Message[]) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...history.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: query },
+      ],
+      temperature: 0.4,
+      max_tokens: 300,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "Sorry, I couldn't get an answer.";
 }
 
 export default function ChatWidget() {
@@ -27,15 +82,7 @@ export default function ChatWidget() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const stored = window.sessionStorage.getItem("chowk-session");
-    const id = stored ?? newSession();
-    if (!stored) window.sessionStorage.setItem("chowk-session", id);
-    setSessionId(id);
-  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -60,20 +107,8 @@ export default function ChatWidget() {
     setPending(true);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: question,
-          session_id: sessionId,
-          history: history.slice(1, -1).slice(-6),
-        }),
-      });
-
-      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-
-      const data = await res.json();
-      setMessages([...history, { role: "assistant", content: data.answer }]);
+      const answer = await askKitchen(question, history.slice(1, -1).slice(-6));
+      setMessages([...history, { role: "assistant", content: answer }]);
     } catch {
       setError("The kitchen assistant is not answering. Try again, or call us on 021 3584 9002.");
       setMessages(history);
@@ -83,9 +118,6 @@ export default function ChatWidget() {
   }
 
   function reset() {
-    const id = newSession();
-    window.sessionStorage.setItem("chowk-session", id);
-    setSessionId(id);
     setMessages([GREETING]);
     setError(null);
   }
